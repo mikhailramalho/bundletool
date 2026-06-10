@@ -91,6 +91,7 @@ import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -1236,6 +1237,43 @@ public class InstallApksCommandTest {
             baseEnApk.toString(),
             onDemandFeatureMasterApk.toString(),
             additionalXml.getFileName().toString());
+  }
+
+  @Test
+  public void userZeroDevice_installOptionsCarryNoUserId() throws Exception {
+    // At user 0 the install options must carry no userId at all, so pm install keeps its legacy
+    // no---user default (install for all users).
+    assertThat(runUserIdCaptureTest(/* deviceUserId= */ 0)).containsExactly(Optional.empty());
+  }
+
+  @Test
+  public void hsumDevice_installOptionsCarryActiveUser() throws Exception {
+    assertThat(runUserIdCaptureTest(/* deviceUserId= */ 10)).containsExactly(Optional.of(10));
+  }
+
+  private List<Optional<Integer>> runUserIdCaptureTest(int deviceUserId) throws Exception {
+    Path apksFile =
+        createApks(
+            createSimpleTableOfContent(ZipPath.create("base-master.apk")),
+            /* apksInDirectory= */ false);
+
+    List<Optional<Integer>> installUserIds = new ArrayList<>();
+    FakeDevice fakeDevice =
+        FakeDevice.fromDeviceSpec(DEVICE_ID, DeviceState.ONLINE, lDeviceWithLocales("en-US"));
+    fakeDevice.setCurrentUser(deviceUserId);
+    AdbServer adbServer =
+        new FakeAdbServer(/* hasInitialDeviceList= */ true, ImmutableList.of(fakeDevice));
+    fakeDevice.setInstallApksSideEffect(
+        (apks, installOptions) -> installUserIds.add(installOptions.getUserId()));
+
+    InstallApksCommand.builder()
+        .setApksArchivePath(apksFile)
+        .setAdbPath(adbPath)
+        .setAdbServer(adbServer)
+        .build()
+        .execute();
+
+    return installUserIds;
   }
 
   @Test

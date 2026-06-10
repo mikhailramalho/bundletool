@@ -39,6 +39,7 @@ import com.android.tools.build.bundletool.device.Device.InstallOptions;
 import com.android.tools.build.bundletool.device.Device.PushOptions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Clock;
@@ -254,6 +255,124 @@ public final class DdmlibDeviceTest {
         .pushFile(APK_PATH.toFile().getAbsolutePath(), tempPath + "/" + APK_PATH.getFileName());
     verify(mockDevice)
         .pushFile(APK_PATH_2.toFile().getAbsolutePath(), tempPath + "/" + APK_PATH_2.getFileName());
+  }
+
+  @Test
+  public void installApks_userIdAddsUserArg() throws Exception {
+    when(mockDevice.getVersion()).thenReturn(new AndroidVersion(VersionCodes.LOLLIPOP));
+    DdmlibDevice ddmlibDevice = new DdmlibDevice(mockDevice);
+
+    ddmlibDevice.installApks(
+        ImmutableList.of(APK_PATH), InstallOptions.builder().setUserId(10).build());
+
+    verify(mockDevice)
+        .installPackages(
+            eq(ImmutableList.of(APK_PATH.toFile())),
+            anyBoolean(),
+            extraArgsCaptor.capture(),
+            anyLong(),
+            any(TimeUnit.class));
+    assertThat(extraArgsCaptor.getValue()).containsAtLeast("--user", "10").inOrder();
+  }
+
+  @Test
+  public void installApks_noUserIdOmitsUserArg() throws Exception {
+    when(mockDevice.getVersion()).thenReturn(new AndroidVersion(VersionCodes.LOLLIPOP));
+    DdmlibDevice ddmlibDevice = new DdmlibDevice(mockDevice);
+
+    ddmlibDevice.installApks(ImmutableList.of(APK_PATH), InstallOptions.builder().build());
+
+    verify(mockDevice)
+        .installPackages(
+            eq(ImmutableList.of(APK_PATH.toFile())),
+            anyBoolean(),
+            extraArgsCaptor.capture(),
+            anyLong(),
+            any(TimeUnit.class));
+    assertThat(extraArgsCaptor.getValue()).doesNotContain("--user");
+  }
+
+  @Test
+  public void installApks_preL_userIdOmitsUserArg() throws Exception {
+    // The legacy pre-L installPackage path does not accept --user; we must not inject it even
+    // when the caller asked for a specific userId.
+    when(mockDevice.getVersion()).thenReturn(new AndroidVersion(VersionCodes.KITKAT));
+    DdmlibDevice ddmlibDevice = new DdmlibDevice(mockDevice);
+
+    ddmlibDevice.installApks(
+        ImmutableList.of(APK_PATH), InstallOptions.builder().setUserId(10).build());
+
+    // "--user" / "10" must NOT be passed as extra args on the pre-L path.
+    verify(mockDevice).installPackage(eq(APK_PATH.toString()), anyBoolean() /*, no extra args */);
+  }
+
+  @Test
+  public void getCurrentUser_parsesActiveUser() throws Exception {
+    mockAdbShellCommand("am get-current-user", "10\n");
+
+    int userId = new DdmlibDevice(mockDevice).getCurrentUser();
+
+    assertThat(userId).isEqualTo(10);
+  }
+
+  @Test
+  public void getCurrentUser_leadingWhitespaceTolerated() throws Exception {
+    mockAdbShellCommand("am get-current-user", "  10  \n");
+
+    int userId = new DdmlibDevice(mockDevice).getCurrentUser();
+
+    assertThat(userId).isEqualTo(10);
+  }
+
+  @Test
+  public void getCurrentUser_picksFirstNumericLine() throws Exception {
+    // Real-world shells sometimes emit prelude lines (warnings, banner output) before the
+    // command's actual stdout. The parser must skip non-numeric lines and pick the first one
+    // that parses as a non-negative integer.
+    mockAdbShellCommand("am get-current-user", "warning: something\n10\n");
+
+    int userId = new DdmlibDevice(mockDevice).getCurrentUser();
+
+    assertThat(userId).isEqualTo(10);
+  }
+
+  @Test
+  public void getCurrentUser_negativeValueRejected() throws Exception {
+    // Android user ids are non-negative; treat a negative integer as garbage and fall back.
+    mockAdbShellCommand("am get-current-user", "-1\n");
+
+    int userId = new DdmlibDevice(mockDevice).getCurrentUser();
+
+    assertThat(userId).isEqualTo(0);
+  }
+
+  @Test
+  public void getCurrentUser_unparseableOutputDefaultsToZero() throws Exception {
+    mockAdbShellCommand("am get-current-user", "no such command\n");
+
+    int userId = new DdmlibDevice(mockDevice).getCurrentUser();
+
+    assertThat(userId).isEqualTo(0);
+  }
+
+  @Test
+  public void getCurrentUser_emptyOutputDefaultsToZero() throws Exception {
+    mockAdbShellCommand("am get-current-user", "");
+
+    int userId = new DdmlibDevice(mockDevice).getCurrentUser();
+
+    assertThat(userId).isEqualTo(0);
+  }
+
+  @Test
+  public void getCurrentUser_shellExceptionDefaultsToZero() throws Exception {
+    Mockito.doThrow(new IOException("adb gone"))
+        .when(mockDevice)
+        .executeShellCommand(eq("am get-current-user"), any(), anyLong(), any());
+
+    int userId = new DdmlibDevice(mockDevice).getCurrentUser();
+
+    assertThat(userId).isEqualTo(0);
   }
 
   @Test

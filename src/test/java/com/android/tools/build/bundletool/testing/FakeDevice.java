@@ -63,6 +63,7 @@ public class FakeDevice extends Device {
   private final ImmutableMap<String, String> properties;
   private final Map<String, FakeShellCommandAction> commandInjections = new HashMap<>();
   private final boolean hasPrivacySandbox;
+  private int currentUser = 0;
   private Optional<SideEffect<InstallOptions>> installApksSideEffect = Optional.empty();
   private Optional<SideEffect<PushOptions>> pushSideEffect = Optional.empty();
   private Optional<RemoveRemotePathSideEffect> removeRemotePathSideEffect = Optional.empty();
@@ -303,6 +304,15 @@ public class FakeDevice extends Device {
   @Override
   public boolean supportsPrivacySandbox() {
     return hasPrivacySandbox;
+  }
+
+  @Override
+  public int getCurrentUser() {
+    return currentUser;
+  }
+
+  public void setCurrentUser(int userId) {
+    this.currentUser = userId;
   }
 
   public void setInstallApksSideEffect(SideEffect<InstallOptions> sideEffect) {

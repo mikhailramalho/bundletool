@@ -54,6 +54,14 @@ public abstract class Device {
 
   public abstract ImmutableList<String> getGlExtensions();
 
+  /**
+   * Returns the active Android user id, or 0 if it cannot be determined.
+   *
+   * <p>On a Headless System User Mode (HSUM) device the active user is not 0, and operations such
+   * as {@code pm install} or pushes to {@code /storage/emulated/...} must target that user.
+   */
+  public abstract int getCurrentUser();
+
   public abstract void executeShellCommand(
       String command,
       IShellOutputReceiver receiver,
@@ -93,6 +101,9 @@ public abstract class Device {
 
     public abstract Duration getTimeout();
 
+    /** Android user id to install for; if absent, pm install picks its default. */
+    public abstract Optional<Integer> getUserId();
+
     public static Builder builder() {
       return new AutoValue_Device_InstallOptions.Builder()
           .setTimeout(DEFAULT_ADB_TIMEOUT)
@@ -114,6 +125,8 @@ public abstract class Device {
       public abstract Builder setAllowTestOnly(boolean allowTestOnly);
 
       public abstract Builder setGrantRuntimePermissions(boolean value);
+
+      public abstract Builder setUserId(int userId);
 
       public abstract InstallOptions build();
     }

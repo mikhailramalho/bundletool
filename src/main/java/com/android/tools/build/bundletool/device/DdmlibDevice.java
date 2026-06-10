@@ -54,6 +54,7 @@ import java.util.concurrent.TimeUnit;
 /** Ddmlib-backed implementation of the {@link Device}. */
 public class DdmlibDevice extends Device {
   private static final String DENSITY_OUTPUT_PREFIX = "Physical density:";
+  private static final String GET_CURRENT_USER_COMMAND = "am get-current-user";
 
   private final IDevice device;
   private final Clock clock;
@@ -161,6 +162,34 @@ public class DdmlibDevice extends Device {
   }
 
   @Override
+  public int getCurrentUser() {
+    try {
+      return new AdbShellCommandTask(this, GET_CURRENT_USER_COMMAND)
+          .execute(/* deadline= */ 1, MINUTES)
+          .stream()
+          .map(String::trim)
+          .filter(line -> !line.isEmpty())
+          .map(Ints::tryParse)
+          .filter(value -> value != null && value >= 0)
+          .findFirst()
+          .orElseGet(
+              () -> {
+                System.err.println(
+                    "Warning: '"
+                        + GET_CURRENT_USER_COMMAND
+                        + "' returned no parseable user id; falling back to user 0.");
+                return 0;
+              });
+    } catch (CommandExecutionException e) {
+      System.err.println(
+          "Warning: failed to query the active Android user via '"
+              + GET_CURRENT_USER_COMMAND
+              + "'; falling back to user 0.");
+      return 0;
+    }
+  }
+
+  @Override
   public void executeShellCommand(
       String command,
       IShellOutputReceiver receiver,
@@ -191,6 +220,16 @@ public class DdmlibDevice extends Device {
     try {
       if (getVersion()
           .isGreaterOrEqualThan(AndroidVersion.ALLOW_SPLIT_APK_INSTALLATION.getApiLevel())) {
+        // --user was added to pm install in API 17 (multi-user support), and Headless System
+        // User Mode is an Android 14+ concept; the legacy pre-L installPackage path below does
+        // not accept --user, so we only inject it on the modern installPackages path.
+        installOptions
+            .getUserId()
+            .ifPresent(
+                userId -> {
+                  extraArgs.add("--user");
+                  extraArgs.add(Integer.toString(userId));
+                });
         device.installPackages(
             apkFiles,
             installOptions.getAllowReinstall(),

@@ -46,6 +46,7 @@ import com.android.tools.build.bundletool.model.exceptions.CommandExecutionExcep
 import com.android.tools.build.bundletool.model.utils.DefaultSystemEnvironmentProvider;
 import com.android.tools.build.bundletool.model.utils.ResultUtils;
 import com.android.tools.build.bundletool.model.utils.SystemEnvironmentProvider;
+import com.android.tools.build.bundletool.model.utils.Versions;
 import com.google.auto.value.AutoValue;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
@@ -221,13 +222,21 @@ public abstract class InstallApksCommand {
               .build();
 
       AdbRunner adbRunner = new AdbRunner(adbServer);
-      InstallOptions installOptions =
+      // Headless System User Mode devices boot with the active user not being 0; without an
+      // explicit --user, pm would install relative to user 0 and the app would not be visible
+      // to the active user session.
+      InstallOptions.Builder installOptionsBuilder =
           InstallOptions.builder()
               .setAllowDowngrade(getAllowDowngrade())
               .setAllowTestOnly(getAllowTestOnly())
               .setGrantRuntimePermissions(getGrantRuntimePermissions())
-              .setTimeout(getTimeout())
-              .build();
+              .setTimeout(getTimeout());
+
+      int currentUser = queryCurrentUser(adbRunner, deviceSpec);
+      if (currentUser != 0) {
+        installOptionsBuilder.setUserId(currentUser);
+      }
+      InstallOptions installOptions = installOptionsBuilder.build();
 
       if (getDeviceId().isPresent()) {
         adbRunner.run(
@@ -243,6 +252,22 @@ public abstract class InstallApksCommand {
         cleanUpEmulatedSplits(adbRunner, toc);
       }
     }
+  }
+
+  private int queryCurrentUser(AdbRunner adbRunner, DeviceSpec deviceSpec) {
+    // Multi-user exists since API 17, but this command only honors --user on the L+
+    // installPackages path inside DdmlibDevice, so skip the shell roundtrip (and its potential
+    // "command not found" warning) below L and stay with user 0.
+    if (deviceSpec.getSdkVersion() < Versions.ANDROID_L_API_VERSION) {
+      return 0;
+    }
+    int[] currentUser = new int[] {0};
+    if (getDeviceId().isPresent()) {
+      adbRunner.run(device -> currentUser[0] = device.getCurrentUser(), getDeviceId().get());
+    } else {
+      adbRunner.run(device -> currentUser[0] = device.getCurrentUser());
+    }
+    return currentUser[0];
   }
 
   private void cleanUpEmulatedSplits(AdbRunner adbRunner, BuildApksResult toc) {
