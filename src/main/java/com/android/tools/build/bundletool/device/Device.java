@@ -77,8 +77,16 @@ public abstract class Device {
   public abstract Path syncPackageToDevice(Path localFilePath)
       throws TimeoutException, AdbCommandRejectedException, SyncException, IOException;
 
+  /**
+   * Removes a path on the device.
+   *
+   * <p>When {@code runAsPackageName} is set, the removal runs with the package's privileges, and
+   * {@code userId} selects the Android user the package is resolved in (HSUM devices install only
+   * for the active non-zero user, where a user-0 {@code run-as} would fail). A {@code userId} of 0
+   * preserves the legacy {@code run-as} invocation.
+   */
   public abstract void removeRemotePath(
-      String remoteFilePath, Optional<String> runAsPackageName, Duration timeout)
+      String remoteFilePath, Optional<String> runAsPackageName, Duration timeout, int userId)
       throws IOException;
 
   public abstract void pull(ImmutableList<FilePullParams> files);
@@ -145,6 +153,9 @@ public abstract class Device {
 
     public abstract boolean getClearDestinationPath();
 
+    /** Android user id whose storage the push should target; if absent, treated as user 0. */
+    public abstract Optional<Integer> getUserId();
+
     public static Builder builder() {
       return new AutoValue_Device_PushOptions.Builder()
           .setTimeout(DEFAULT_ADB_TIMEOUT)
@@ -161,6 +172,8 @@ public abstract class Device {
       public abstract Builder setPackageName(String packageName);
 
       public abstract Builder setClearDestinationPath(boolean shouldClear);
+
+      public abstract Builder setUserId(int userId);
 
       public abstract PushOptions build();
     }

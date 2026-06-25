@@ -259,7 +259,9 @@ public class DdmlibDevice extends Device {
         new RemoteCommandExecutor(this, pushOptions.getTimeout().toMillis(), System.err);
     DdmPreferences.setTimeOut((int) pushOptions.getTimeout().toMillis());
     try {
-      splitsPath = resolveLocalTestingPath(splitsPath, pushOptions.getPackageName());
+      splitsPath =
+          resolveLocalTestingPath(
+              splitsPath, pushOptions.getPackageName(), pushOptions.getUserId().orElse(0));
       // Now the path is absolute. We assume it's pointing to a location writeable by ADB shell.
       // It shouldn't point to app's private directory.
 
@@ -341,13 +343,24 @@ public class DdmlibDevice extends Device {
 
   @Override
   public void removeRemotePath(
-      String remoteFilePath, Optional<String> runAsPackageName, Duration timeout)
+      String remoteFilePath, Optional<String> runAsPackageName, Duration timeout, int userId)
       throws IOException {
     RemoteCommandExecutor executor =
         new RemoteCommandExecutor(this, timeout.toMillis(), System.err);
     try {
       if (runAsPackageName.isPresent()) {
-        executor.executeAndPrint("run-as %s rm -rf %s", runAsPackageName.get(), remoteFilePath);
+        if (userId != 0 && !getVersion().isGreaterOrEqualThan(VersionCodes.N)) {
+          System.err.println(
+              "Warning: skipping splitcompat cleanup for a secondary user on pre-N Android.");
+          return;
+        }
+        if (userId != 0) {
+          executor.executeAndPrint(
+              "run-as %s --user %s rm -rf %s",
+              runAsPackageName.get(), Integer.toString(userId), remoteFilePath);
+        } else {
+          executor.executeAndPrint("run-as %s rm -rf %s", runAsPackageName.get(), remoteFilePath);
+        }
       } else {
         executor.executeAndPrint("rm -rf %s", remoteFilePath);
       }

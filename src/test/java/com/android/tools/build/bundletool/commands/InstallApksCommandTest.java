@@ -1021,9 +1021,10 @@ public class InstallApksCommandTest {
           pushedFiles.addAll(files);
         });
     fakeDevice.setRemoveRemotePathSideEffect(
-        (remotePath, runAs, removeTimeout) -> {
+        (remotePath, runAs, removeTimeout, userId) -> {
           assertThat(removeTimeout).isEqualTo(timeout);
           assertThat(runAs).hasValue(PKG_NAME);
+          assertThat(userId).isEqualTo(0);
           clearedPathes.add(remotePath);
         });
 
@@ -1054,7 +1055,8 @@ public class InstallApksCommandTest {
             onDemandFeatureMasterApk.toString(),
             onDemandAssetMasterApk.toString());
     assertThat(clearedPathes)
-        .containsExactly(LocalTestingPathResolver.getLocalTestingWorkingDir(PKG_NAME));
+        .containsExactly(
+            LocalTestingPathResolver.getLocalTestingWorkingDir(PKG_NAME, /* userId= */ 0));
   }
 
   @Test
@@ -1274,6 +1276,132 @@ public class InstallApksCommandTest {
         .execute();
 
     return installUserIds;
+  }
+
+  @Test
+  public void localTestingMode_userZeroDevice_optionsCarryNoUserId() throws Exception {
+    // At user 0 the options must carry no userId at all, so pm install keeps its legacy
+    // no---user default (install for all users) and push/cleanup keep the legacy paths.
+    runLocalTestingUserIdTest(
+        /* deviceUserId= */ 0, /* expectedUserId= */ Optional.empty(), /* cleanupUserId= */ 0);
+  }
+
+  @Test
+  public void localTestingMode_hsumDevice_plumbsUserIdEverywhere() throws Exception {
+    runLocalTestingUserIdTest(
+        /* deviceUserId= */ 10, /* expectedUserId= */ Optional.of(10), /* cleanupUserId= */ 10);
+  }
+
+  private void runLocalTestingUserIdTest(
+      int deviceUserId, Optional<Integer> expectedUserId, int cleanupUserId) throws Exception {
+    Path apksFile = createApks(createLocalTestingToc(), /* apksInDirectory= */ false);
+
+    List<Optional<Integer>> installUserIds = new ArrayList<>();
+    List<Optional<Integer>> pushUserIds = new ArrayList<>();
+    List<String> clearedPaths = new ArrayList<>();
+    List<Integer> cleanupUserIds = new ArrayList<>();
+    FakeDevice fakeDevice =
+        FakeDevice.fromDeviceSpec(DEVICE_ID, DeviceState.ONLINE, lDeviceWithLocales("en-US"));
+    fakeDevice.setCurrentUser(deviceUserId);
+    AdbServer adbServer =
+        new FakeAdbServer(/* hasInitialDeviceList= */ true, ImmutableList.of(fakeDevice));
+    fakeDevice.setInstallApksSideEffect(
+        (apks, installOptions) -> installUserIds.add(installOptions.getUserId()));
+    fakeDevice.setPushSideEffect((files, pushOptions) -> pushUserIds.add(pushOptions.getUserId()));
+    fakeDevice.setRemoveRemotePathSideEffect(
+        (remotePath, runAs, removeTimeout, userId) -> {
+          clearedPaths.add(remotePath);
+          cleanupUserIds.add(userId);
+        });
+
+    InstallApksCommand.builder()
+        .setApksArchivePath(apksFile)
+        .setAdbPath(adbPath)
+        .setAdbServer(adbServer)
+        .build()
+        .execute();
+
+    assertThat(installUserIds).containsExactly(expectedUserId);
+    assertThat(pushUserIds).containsExactly(expectedUserId);
+    assertThat(clearedPaths)
+        .containsExactly(
+            LocalTestingPathResolver.getLocalTestingWorkingDir(PKG_NAME, deviceUserId));
+    assertThat(cleanupUserIds).containsExactly(cleanupUserId);
+  }
+
+  @Test
+  public void localTestingMode_currentUserChangesMidFlow_originalUserIdHonored() throws Exception {
+    // Regression guard for the TOCTOU window: InstallApksCommand must capture the active user
+    // once and reuse it for install + push + cleanup. Even if the device's active user changes
+    // between calls, the operation must stay coherent against the originally-captured user.
+    Path apksFile = createApks(createLocalTestingToc(), /* apksInDirectory= */ false);
+
+    int capturedUser = 10;
+    int mutatedUser = 99;
+
+    List<Optional<Integer>> installUserIds = new ArrayList<>();
+    List<Optional<Integer>> pushUserIds = new ArrayList<>();
+    List<String> clearedPaths = new ArrayList<>();
+    FakeDevice fakeDevice =
+        FakeDevice.fromDeviceSpec(DEVICE_ID, DeviceState.ONLINE, lDeviceWithLocales("en-US"));
+    fakeDevice.setCurrentUser(capturedUser);
+    AdbServer adbServer =
+        new FakeAdbServer(/* hasInitialDeviceList= */ true, ImmutableList.of(fakeDevice));
+    // Right as install fires, mutate the device's "active user" to a different value. The push
+    // and cleanup that follow must still see the originally captured user.
+    fakeDevice.setInstallApksSideEffect(
+        (apks, installOptions) -> {
+          installUserIds.add(installOptions.getUserId());
+          fakeDevice.setCurrentUser(mutatedUser);
+        });
+    fakeDevice.setPushSideEffect((files, pushOptions) -> pushUserIds.add(pushOptions.getUserId()));
+    fakeDevice.setRemoveRemotePathSideEffect(
+        (remotePath, runAs, removeTimeout, userId) -> clearedPaths.add(remotePath));
+
+    InstallApksCommand.builder()
+        .setApksArchivePath(apksFile)
+        .setAdbPath(adbPath)
+        .setAdbServer(adbServer)
+        .build()
+        .execute();
+
+    assertThat(installUserIds).containsExactly(Optional.of(capturedUser));
+    assertThat(pushUserIds).containsExactly(Optional.of(capturedUser));
+    assertThat(clearedPaths)
+        .containsExactly(
+            LocalTestingPathResolver.getLocalTestingWorkingDir(PKG_NAME, capturedUser));
+  }
+
+  /** Minimal local-testing TOC: a base module plus one on-demand feature. */
+  private static BuildApksResult createLocalTestingToc() {
+    ZipPath baseApk = ZipPath.create("base-master.apk");
+    ZipPath baseEnApk = ZipPath.create("base-en.apk");
+    ZipPath onDemandFeatureMasterApk = ZipPath.create("ondemand_feature-master.apk");
+
+    return BuildApksResult.newBuilder()
+        .setPackageName(PKG_NAME)
+        .setBundletool(
+            Bundletool.newBuilder().setVersion(BundleToolVersion.getCurrentVersion().toString()))
+        .addVariant(
+            createVariant(
+                VariantTargeting.getDefaultInstance(),
+                createSplitApkSet(
+                    "base",
+                    createMasterApkDescription(ApkTargeting.getDefaultInstance(), baseApk),
+                    createApkDescription(
+                        apkLanguageTargeting("en"), baseEnApk, /* isMasterSplit= */ false)),
+                createSplitApkSet(
+                    "ondemand_feature",
+                    DeliveryType.ON_DEMAND,
+                    /* moduleDependencies= */ ImmutableList.of(),
+                    createMasterApkDescription(
+                        ApkTargeting.getDefaultInstance(), onDemandFeatureMasterApk))))
+        .setLocalTestingInfo(
+            LocalTestingInfo.newBuilder()
+                .setEnabled(true)
+                .setLocalTestingPath("local_testing")
+                .build())
+        .build();
   }
 
   @Test

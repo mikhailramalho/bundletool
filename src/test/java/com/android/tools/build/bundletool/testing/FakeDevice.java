@@ -283,9 +283,9 @@ public class FakeDevice extends Device {
 
   @Override
   public void removeRemotePath(
-      String remoteFilePath, Optional<String> runAsPackageName, Duration timeout) {
+      String remoteFilePath, Optional<String> runAsPackageName, Duration timeout, int userId) {
     removeRemotePathSideEffect.ifPresent(
-        val -> val.apply(remoteFilePath, runAsPackageName, timeout));
+        val -> val.apply(remoteFilePath, runAsPackageName, timeout, userId));
   }
 
   @Override
@@ -345,7 +345,7 @@ public class FakeDevice extends Device {
 
   /** Remove remote path side effect. */
   public interface RemoveRemotePathSideEffect {
-    void apply(String remotePath, Optional<String> runAs, Duration timeout);
+    void apply(String remotePath, Optional<String> runAs, Duration timeout, int userId);
   }
 
   /** Side effect. */

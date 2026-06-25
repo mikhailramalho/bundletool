@@ -26,12 +26,11 @@ public class LocalTestingPathResolver {
 
   private LocalTestingPathResolver() {}
 
-  public static String resolveLocalTestingPath(String localTestPath, Optional<String> packageName) {
-    // There are two different flows, depending on if the path is absolute or not...
+  public static String resolveLocalTestingPath(
+      String localTestPath, Optional<String> packageName, int userId) {
     if (localTestPath.startsWith("/")) {
-      return localTestPath;
+      return userId == 0 ? localTestPath : rewriteUserPath(localTestPath, userId);
     }
-    // Path is relative, so we're going to try to push it to the app's external dir
     String packageNameStr =
         packageName.orElseThrow(
             () ->
@@ -41,7 +40,27 @@ public class LocalTestingPathResolver {
     return joinUnixPaths("/sdcard/Android/data/", packageNameStr, "files", localTestPath);
   }
 
-  public static String getLocalTestingWorkingDir(String packageName) {
-    return joinUnixPaths("/data/data/", packageName, "files/splitcompat");
+  public static String getLocalTestingWorkingDir(String packageName, int userId) {
+    String base = userId == 0 ? "/data/data" : "/data/user/" + userId;
+    return joinUnixPaths(base, packageName, "files/splitcompat");
+  }
+
+  private static String rewriteUserPath(String absolutePath, int userId) {
+    String externalStoragePath = "/sdcard";
+    return rewritePrefix(
+        rewritePrefix(
+            absolutePath, "/storage/emulated/0", externalStoragePath),
+        "/data/data",
+        "/data/user/" + userId);
+  }
+
+  private static String rewritePrefix(String absolutePath, String oldPrefix, String newPrefix) {
+    if (absolutePath.equals(oldPrefix)) {
+      return newPrefix;
+    }
+    if (absolutePath.startsWith(oldPrefix + "/")) {
+      return newPrefix + absolutePath.substring(oldPrefix.length());
+    }
+    return absolutePath;
   }
 }

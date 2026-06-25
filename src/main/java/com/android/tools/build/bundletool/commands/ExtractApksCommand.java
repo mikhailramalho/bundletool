@@ -358,7 +358,9 @@ public abstract class ExtractApksCommand {
     String localTestingPath = toc.getLocalTestingInfo().getLocalTestingPath();
     String packageName = toc.getPackageName();
     return LocalTestingInfoForMetadata.newBuilder()
-        .setLocalTestingDir(resolveLocalTestingPath(localTestingPath, Optional.of(packageName)))
+        .setLocalTestingDir(
+            resolveLocalTestingPath(
+                localTestingPath, Optional.of(packageName), /* userId= */ 0))
         .build();
   }
 

@@ -20,6 +20,7 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
@@ -258,6 +259,53 @@ public final class DdmlibDeviceTest {
   }
 
   @Test
+  public void pushFiles_userIdKeepsSdcardPrefix() throws Exception {
+    String requestedPath = "/sdcard/Android/data/com.acme.anvil/files/splits";
+    when(mockDevice.getVersion()).thenReturn(new AndroidVersion(VersionCodes.KITKAT));
+    DdmlibDevice ddmlibDevice = new DdmlibDevice(mockDevice);
+
+    mockAdbShellCommand(String.format("rm -rf '%s' && echo OK", requestedPath), "OK\n");
+    mockAdbShellCommand(
+        String.format(
+            "mkdir -p '%1$s' && rmdir '%1$s' && mkdir -p '%1$s' && echo OK", requestedPath),
+        "OK\n");
+
+    ddmlibDevice.push(
+        ImmutableList.of(APK_PATH),
+        PushOptions.builder()
+            .setDestinationPath(requestedPath)
+            .setPackageName("com.acme.anvil")
+            .setUserId(10)
+            .build());
+
+    verify(mockDevice)
+        .pushFile(
+            APK_PATH.toFile().getAbsolutePath(), requestedPath + "/" + APK_PATH.getFileName());
+  }
+
+  @Test
+  public void pushFiles_missingUserIdFallsBackToUserZero() throws Exception {
+    // When PushOptions carries no userId, DdmlibDevice defaults to 0; at userId 0 the resolver
+    // preserves the legacy /sdcard form (per back-compat guarantee), so the destination is the
+    // input string unchanged.
+    String path = "/sdcard/Android/data/com.acme.anvil/files/splits";
+    when(mockDevice.getVersion()).thenReturn(new AndroidVersion(VersionCodes.KITKAT));
+    DdmlibDevice ddmlibDevice = new DdmlibDevice(mockDevice);
+
+    mockAdbShellCommand(String.format("rm -rf '%s' && echo OK", path), "OK\n");
+    mockAdbShellCommand(
+        String.format("mkdir -p '%1$s' && rmdir '%1$s' && mkdir -p '%1$s' && echo OK", path),
+        "OK\n");
+
+    ddmlibDevice.push(
+        ImmutableList.of(APK_PATH),
+        PushOptions.builder().setDestinationPath(path).setPackageName("com.acme.anvil").build());
+
+    verify(mockDevice)
+        .pushFile(APK_PATH.toFile().getAbsolutePath(), path + "/" + APK_PATH.getFileName());
+  }
+
+  @Test
   public void installApks_userIdAddsUserArg() throws Exception {
     when(mockDevice.getVersion()).thenReturn(new AndroidVersion(VersionCodes.LOLLIPOP));
     DdmlibDevice ddmlibDevice = new DdmlibDevice(mockDevice);
@@ -424,7 +472,10 @@ public final class DdmlibDeviceTest {
 
     mockAdbShellCommand(String.format("rm -rf '%s' && echo OK", pathToRemove), "OK\n");
     ddmlibDevice.removeRemotePath(
-        pathToRemove, /* runAsPackageName= */ Optional.empty(), Duration.ofMillis(10));
+        pathToRemove,
+        /* runAsPackageName= */ Optional.empty(),
+        Duration.ofMillis(10),
+        /* userId= */ 0);
   }
 
   @Test
@@ -435,7 +486,37 @@ public final class DdmlibDeviceTest {
 
     mockAdbShellCommand(
         String.format("run-as '%s' rm -rf '%s' && echo OK", packageName, pathToRemove), "OK\n");
-    ddmlibDevice.removeRemotePath(pathToRemove, Optional.of(packageName), Duration.ofMillis(10));
+    ddmlibDevice.removeRemotePath(
+        pathToRemove, Optional.of(packageName), Duration.ofMillis(10), /* userId= */ 0);
+  }
+
+  @Test
+  public void removeRemotePath_runAs_hsumUser() throws Exception {
+    // On HSUM the package only exists for the active non-zero user, so run-as must carry --user.
+    String packageName = "com.test";
+    String pathToRemove = "/data/user/10/com.test/files/splitcompat";
+    when(mockDevice.getVersion()).thenReturn(new AndroidVersion(VersionCodes.N));
+    DdmlibDevice ddmlibDevice = new DdmlibDevice(mockDevice);
+
+    mockAdbShellCommand(
+        String.format("run-as '%s' --user '10' rm -rf '%s' && echo OK", packageName, pathToRemove),
+        "OK\n");
+    ddmlibDevice.removeRemotePath(
+        pathToRemove, Optional.of(packageName), Duration.ofMillis(10), /* userId= */ 10);
+  }
+
+  @Test
+  public void removeRemotePath_runAs_secondaryUser_preN_skipsCleanup() throws Exception {
+    when(mockDevice.getVersion()).thenReturn(new AndroidVersion(VersionCodes.M));
+    DdmlibDevice ddmlibDevice = new DdmlibDevice(mockDevice);
+
+    ddmlibDevice.removeRemotePath(
+        "/data/user/10/com.test/files/splitcompat",
+        Optional.of("com.test"),
+        Duration.ofMillis(10),
+        /* userId= */ 10);
+
+    verify(mockDevice, never()).executeShellCommand(anyString(), any(), anyLong(), any());
   }
 
   @Test

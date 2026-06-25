@@ -222,17 +222,14 @@ public abstract class InstallApksCommand {
               .build();
 
       AdbRunner adbRunner = new AdbRunner(adbServer);
-      // Headless System User Mode devices boot with the active user not being 0; without an
-      // explicit --user, pm would install relative to user 0 and the app would not be visible
-      // to the active user session.
+      // Capture the active user once so install, push, and cleanup stay aligned.
+      int currentUser = queryCurrentUser(adbRunner, deviceSpec);
       InstallOptions.Builder installOptionsBuilder =
           InstallOptions.builder()
               .setAllowDowngrade(getAllowDowngrade())
               .setAllowTestOnly(getAllowTestOnly())
               .setGrantRuntimePermissions(getGrantRuntimePermissions())
               .setTimeout(getTimeout());
-
-      int currentUser = queryCurrentUser(adbRunner, deviceSpec);
       if (currentUser != 0) {
         installOptionsBuilder.setUserId(currentUser);
       }
@@ -246,18 +243,16 @@ public abstract class InstallApksCommand {
       }
 
       if (!filesToPush.isEmpty()) {
-        pushFiles(filesToPush, toc, adbRunner);
+        pushFiles(filesToPush, toc, adbRunner, currentUser);
       }
       if (toc.getLocalTestingInfo().getEnabled()) {
-        cleanUpEmulatedSplits(adbRunner, toc);
+        cleanUpEmulatedSplits(adbRunner, toc, currentUser);
       }
     }
   }
 
   private int queryCurrentUser(AdbRunner adbRunner, DeviceSpec deviceSpec) {
-    // Multi-user exists since API 17, but this command only honors --user on the L+
-    // installPackages path inside DdmlibDevice, so skip the shell roundtrip (and its potential
-    // "command not found" warning) below L and stay with user 0.
+    // The HSUM-aware install path is only used on L+.
     if (deviceSpec.getSdkVersion() < Versions.ANDROID_L_API_VERSION) {
       return 0;
     }
@@ -270,20 +265,21 @@ public abstract class InstallApksCommand {
     return currentUser[0];
   }
 
-  private void cleanUpEmulatedSplits(AdbRunner adbRunner, BuildApksResult toc) {
+  private void cleanUpEmulatedSplits(AdbRunner adbRunner, BuildApksResult toc, int userId) {
     if (getDeviceId().isPresent()) {
-      adbRunner.run(device -> removeRemotePath(device, toc), getDeviceId().get());
+      adbRunner.run(device -> removeRemotePath(device, toc, userId), getDeviceId().get());
     } else {
-      adbRunner.run(device -> removeRemotePath(device, toc));
+      adbRunner.run(device -> removeRemotePath(device, toc, userId));
     }
   }
 
-  private void removeRemotePath(Device device, BuildApksResult toc) {
+  private void removeRemotePath(Device device, BuildApksResult toc, int userId) {
     try {
       device.removeRemotePath(
-          LocalTestingPathResolver.getLocalTestingWorkingDir(toc.getPackageName()),
+          LocalTestingPathResolver.getLocalTestingWorkingDir(toc.getPackageName(), userId),
           Optional.of(toc.getPackageName()),
-          getTimeout());
+          getTimeout(),
+          userId);
     } catch (IOException e) {
       System.err.println(
           "Failed to remove working directory with local testing splits. Your app might"
@@ -365,7 +361,8 @@ public abstract class InstallApksCommand {
         .collect(toImmutableList());
   }
 
-  private void pushFiles(ImmutableList<Path> files, BuildApksResult toc, AdbRunner adbRunner) {
+  private void pushFiles(
+      ImmutableList<Path> files, BuildApksResult toc, AdbRunner adbRunner, int userId) {
     String packageName = toc.getPackageName();
     if (packageName.isEmpty()) {
       throw CommandExecutionException.builder()
@@ -380,6 +377,9 @@ public abstract class InstallApksCommand {
             .setClearDestinationPath(true)
             .setPackageName(packageName)
             .setTimeout(getTimeout());
+    if (userId != 0) {
+      pushOptions.setUserId(userId);
+    }
 
     if (getDeviceId().isPresent()) {
       adbRunner.run(device -> device.push(files, pushOptions.build()), getDeviceId().get());
